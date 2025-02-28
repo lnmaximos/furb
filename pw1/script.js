@@ -1,3 +1,10 @@
+// Alterações feitas após a apresentação ao professor:
+// Adicionadas requisições POST, DELETE e PATCH nas funções inserirFoto, excluirFoto e no EventListener do elemento tabelaBody, respectivamente
+// Antes eu pegava os registros da API de 100 em 100, agora eu pego todos de uma vez
+// Antes os IDs dos novos itens eram setados com UUIDs, mas agora, como estou interagindo com a API, passei a calculá-los como o último ID + 1 (por isso que eu parei de pegar os registros de 100 em 100 e passei a chamar todos de uma vez)
+// Obs: A API seta os IDs de todos os novos itens como 5001. Eu estou calculando o ID por aqui e enviando ele na requisição mesmo assim para que, se inserirmos vários novos itens através da página, eles não fiquem todos com o mesmo ID na tabela de visualização
+// Obs: Por mais que os novos itens tenham os maiores IDs, eles continuam aparecendo no começo da tabela para conseguirmos ver as inserções realizadas)
+
 const apiUrl = 'https://jsonplaceholder.typicode.com/photos';
 const itensPorPagina = 10;
 let currentPage = 1;
@@ -6,7 +13,7 @@ let modoEdicao = false;
 async function carregarFotosIniciais() {
     let fotos = JSON.parse(localStorage.getItem('fotos')) || [];
     if (fotos.length === 0) {
-        const response = await fetch(`${apiUrl}?_start=0&_limit=100`);
+        const response = await fetch(`${apiUrl}`);
         fotos = await response.json();
         localStorage.setItem('fotos', JSON.stringify(fotos));
     }
@@ -33,18 +40,6 @@ function atualizarTabela(page = 1) {
             </tr>`;
     });
 }
-
-async function carregarMaisFotos() {
-    const fotos = JSON.parse(localStorage.getItem('fotos')) || [];
-    const offset = fotos.length;
-
-    const response = await fetch(`${apiUrl}?_start=${offset}&_limit=100`);
-    const novasFotos = await response.json();
-
-    const fotosAtualizadas = [...fotos, ...novasFotos];
-    localStorage.setItem('fotos', JSON.stringify(fotosAtualizadas));
-}
-
 async function mudarPagina(direcao) {
     const fotos = JSON.parse(localStorage.getItem('fotos')) || [];
     const fotosExcluidas = JSON.parse(localStorage.getItem('fotosExcluidas')) || [];
@@ -55,11 +50,6 @@ async function mudarPagina(direcao) {
 
     currentPage = novaPagina;
     atualizarTabela(currentPage);
-
-    if ((currentPage * itensPorPagina) >= fotos.length) {
-        await carregarMaisFotos();
-        atualizarTabela(currentPage);
-    }
 }
 
 function converterImagemParaBase64(file) {
@@ -93,25 +83,43 @@ async function inserirFoto(event) {
         }
     }
 
+    const fotos = JSON.parse(localStorage.getItem('fotos')) || [];
+
+    const ultimoId = fotos.length > 0 ? Math.max(...fotos.map(foto => foto.id)) : 5000;
+    const novoId = ultimoId + 1;
+
     const novoItem = {
-        id: crypto.randomUUID(),
+        albumId: 1,
+        id: novoId,
         title,
+        url: imageUrl,
         thumbnailUrl: imageUrl
     };
 
-    const fotos = JSON.parse(localStorage.getItem('fotos')) || [];
-    fotos.unshift(novoItem);
-    localStorage.setItem('fotos', JSON.stringify(fotos));
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(novoItem)
+        });
 
-    atualizarTabela(currentPage);
+        if (!response.ok) throw new Error('Erro ao inserir registro na API.');
 
-    document.getElementById('inserirForm').reset();
-    alert('Item inserido com sucesso!');
+        fotos.unshift(novoItem);
+        localStorage.setItem('fotos', JSON.stringify(fotos));
+    
+        atualizarTabela(currentPage);
+    
+        document.getElementById('inserirForm').reset();
+        alert('Item inserido com sucesso!');
+    } catch (error) {
+        alert('Erro ao inserir registro na API e no localStorage.')
+    }
 }
 
-function excluirFoto(event) {
+async function excluirFoto(event) {
     event.preventDefault();
-    const id = document.getElementById('deleteId').value.trim();
+    const id = parseInt(document.getElementById('deleteId').value.trim());
 
     if (!id) {
         alert('Informe um código válido para excluir!');
@@ -119,26 +127,29 @@ function excluirFoto(event) {
     }
 
     const fotos = JSON.parse(localStorage.getItem('fotos')) || [];
-    const fotosExcluidas = JSON.parse(localStorage.getItem('fotosExcluidas')) || [];
 
-    const idNumerico = !isNaN(id) && id.trim() !== '';
-
-    const idFormatado = idNumerico ? parseInt(id) : id;
-
-    const fotoExistente = fotos.some(foto => foto.id === idFormatado);
-
+    const fotoExistente = fotos.some(foto => foto.id === id);
+    
     if (!fotoExistente) {
         alert('O ID informado não existe!');
         return;
     }
 
-    localStorage.setItem('fotos', JSON.stringify(fotos.filter(foto => foto.id !== idFormatado)));
-    fotosExcluidas.push(idFormatado);
-    localStorage.setItem('fotosExcluidas', JSON.stringify(fotosExcluidas));
+    try {
+        const response = await fetch(`${apiUrl}/${id}`, {
+            method: 'DELETE'
+        });
 
-    atualizarTabela(currentPage);
-    document.getElementById('excluirForm').reset();
-    alert('Item excluído com sucesso!');
+        if (!response.ok) throw new Error('Erro ao excluir registro na API.');
+    
+        localStorage.setItem('fotos', JSON.stringify(fotos.filter(foto => foto.id !== id)));
+    
+        atualizarTabela(currentPage);
+        document.getElementById('excluirForm').reset();
+        alert('Item excluído com sucesso!');
+    } catch (error) {
+        alert('Erro ao excluir registro da API e do localStorage.');
+    }
 }
 
 function alternarModoEdicao() {
@@ -147,20 +158,32 @@ function alternarModoEdicao() {
     atualizarTabela(currentPage);
 }
 
-document.getElementById('tabelaBody').addEventListener('input', (e) => {
+document.getElementById('tabelaBody').addEventListener('input', async (e) => {
     const row = e.target.closest('tr');
-
-    const id = row.getAttribute('data-id');
-
-    const idNumerico = !isNaN(id) && id.trim() !== '';
-    const idFormatado = idNumerico ? parseInt(id) : id;
+    const id = parseInt(row.getAttribute('data-id'));
 
     const fotos = JSON.parse(localStorage.getItem('fotos')) || [];
+    const index = fotos.findIndex(foto => foto.id === id);
 
-    const index = fotos.findIndex(foto => foto.id === idFormatado);
     if (index !== -1) {
         fotos[index].title = e.target.textContent;
         localStorage.setItem('fotos', JSON.stringify(fotos));
+
+        try {
+            const response = await fetch(`${apiUrl}/${id}`, {
+                method: 'PATCH', // Eu só altero o título, por isso PATCH
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: fotos[index].title })
+            });
+
+            if (!response.ok) {
+                throw new Error('Erro ao alterar o registro na API.');
+            }
+
+            console.log(`Título do registro ${id} atualizado com sucesso na API.`);
+        } catch (error) {
+            alert('Erro ao alterar o registro na API e no localStorage.')
+        }
     }
 });
 
